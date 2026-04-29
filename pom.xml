@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>sk.ainet.demo</groupId>
+    <artifactId>skainet-java-demo</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>SKaiNET Java Demo</name>
+    <description>
+        Minimal pure-Java sample showing tool calling against a local Llama
+        GGUF model via SKaiNET-transformers' Java surface.
+    </description>
+
+    <properties>
+        <maven.compiler.source>21</maven.compiler.source>
+        <maven.compiler.target>21</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <!-- Track SKaiNET-transformers releases here; bump in lockstep. -->
+        <skainet.transformers.version>0.21.0</skainet.transformers.version>
+
+        <!-- The exec-maven-plugin needs the same JVM args the sample does. -->
+        <jvm.preview.args>
+            --enable-preview --add-modules jdk.incubator.vector
+        </jvm.preview.args>
+    </properties>
+
+    <dependencies>
+        <!--
+            KMP modules expose -jvm artifacts for plain-Java/Maven consumers
+            because Maven does not understand Gradle module metadata.
+        -->
+        <dependency>
+            <groupId>sk.ainet.transformers</groupId>
+            <artifactId>kllama-jvm</artifactId>
+            <version>${skainet.transformers.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>sk.ainet.transformers</groupId>
+            <artifactId>llama-jvm</artifactId>
+            <version>${skainet.transformers.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>sk.ainet.transformers</groupId>
+            <artifactId>llm-agent-jvm</artifactId>
+            <version>${skainet.transformers.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>21</release>
+                </configuration>
+            </plugin>
+
+            <!--
+                `mvn exec:java -Dexec.args="model.gguf 'prompt'"`
+                forwards the Vector API jvm flags that SKaiNET's Panama matmul
+                kernel needs at runtime.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <mainClass>sk.ainet.demo.Main</mainClass>
+                    <commandlineArgs>${exec.args}</commandlineArgs>
+                </configuration>
+            </plugin>
+
+            <!--
+                `mvn package` produces a runnable shadow jar at
+                target/skainet-java-demo-0.1.0-SNAPSHOT-shaded.jar that you
+                can hand to a friend along with a model file.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <transformer
+                                    implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                                <transformer
+                                    implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>sk.ainet.demo.Main</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <repositories>
+        <!--
+            Point at Maven Local first so this resolves even if you have
+            published a SNAPSHOT or pre-release locally. Maven Central is
+            implicit and used as the fallback.
+        -->
+        <repository>
+            <id>local</id>
+            <url>file://${user.home}/.m2/repository</url>
+        </repository>
+    </repositories>
+</project>

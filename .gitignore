@@ -1,0 +1,18 @@
+target/
+*.gguf
+*.safetensors
+
+# IDE noise
+.idea/
+*.iml
+.vscode/
+.project
+.classpath
+.settings/
+
+# Maven artifacts
+dependency-reduced-pom.xml
+
+# OS junk
+.DS_Store
+Thumbs.db

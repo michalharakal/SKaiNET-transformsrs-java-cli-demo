@@ -70,7 +70,7 @@ Either via Maven:
 ```bash
 mvn -B exec:exec \
     -Dexec.executable=java \
-    -Dexec.args="-Xms2g -Xmx8g \
+    -Dexec.args="-Xms2g -Xmx16g \
                  --enable-preview --add-modules jdk.incubator.vector \
                  -cp %classpath sk.ainet.demo.Main \
                  Llama-3.2-1B-Instruct-Q8_0.gguf 'What is 17 * 23?'"
@@ -79,16 +79,22 @@ mvn -B exec:exec \
 Or directly with `java`:
 
 ```bash
-java -Xms2g -Xmx8g \
+java -Xms2g -Xmx16g \
      --enable-preview --add-modules jdk.incubator.vector \
      -jar target/skainet-java-demo-0.1.0-SNAPSHOT.jar \
      Llama-3.2-1B-Instruct-Q8_0.gguf 'What is 17 * 23?'
 ```
 
-The `-Xms2g -Xmx8g` heap settings are required: the KV cache and
-weight buffers don't fit in the JVM's ~256 MB default heap, and you
-will get `OutOfMemoryError: Java heap space` during `loadGGUF` without
-them.
+The `-Xms2g -Xmx16g` heap settings are required: in
+SKaiNET-transformers 0.21.1 `KLlamaJava.loadGGUF` allocates the KV
+cache for the model's full context length up front, which for
+Llama 3.2 1B is 131 072 tokens — about 8 GB of FloatArrays just for
+K and V buffers, before any inference work. Without `-Xmx16g` you
+will see `OutOfMemoryError: Java heap space` at
+`HeapKvCache.<init>` during `loadGGUF`. A future SKaiNET-transformers
+release will expose a `maxContextLength` knob so the cache can be
+clamped (e.g. to 4096) and the heap requirement drops back below
+1 GB.
 
 Expected output (Llama 3.2 1B Instruct):
 
@@ -133,9 +139,11 @@ you don't need to import `kotlinx.serialization`.
   on the JVM command line. The pom does this for `mvn exec:java`; for
   `java -jar` you pass it directly.
 - **`OutOfMemoryError: Java heap space` at `HeapKvCache.<init>`** —
-  the JVM's default ~256 MB heap is too small for the KV cache. The
-  example commands above already pass `-Xms2g -Xmx8g`; if you're
-  invoking the jar from your own script, add the same flags.
+  the KV cache is sized to the model's full context length (131 072
+  tokens for Llama 3.2 1B = ~8 GB on heap). Pass `-Xms2g -Xmx16g` as
+  the example commands do. `-Xmx8g` is *not* enough — it lands right
+  at the edge and the JVM can't grow past it for the supporting
+  allocations.
 - **Model not found / corrupt** — re-download with `curl -L -C -`
   (resume) and check the file size matches Hugging Face's listing.
 

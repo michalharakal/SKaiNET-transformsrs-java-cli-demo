@@ -11,6 +11,7 @@ import sk.ainet.apps.kllama.java.KLlamaSession;
 
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.function.Consumer;
 
 /**
  * Minimal Llama tool-calling demo in pure Java.
@@ -94,12 +95,38 @@ public final class Main {
                 .metadata(new ModelMetadata())
                 .build();
 
-            // Stream tokens to stdout as they arrive, then print the final answer.
-            String finalResponse = agent.chat(prompt, System.out::print);
+            // Stream tokens to stdout as they arrive, while measuring throughput.
+            // The Consumer<String> callback fires once per decoded token, so
+            // counting calls = counting tokens. Wall-clock includes prefill
+            // ("time to first token"); decode-only excludes it.
+            final long[] firstTokenNanos = {0};
+            final long[] lastTokenNanos = {0};
+            final int[] tokenCount = {0};
+
+            Consumer<String> meter = token -> {
+                long now = System.nanoTime();
+                if (firstTokenNanos[0] == 0) firstTokenNanos[0] = now;
+                lastTokenNanos[0] = now;
+                tokenCount[0]++;
+                System.out.print(token);
+            };
+
+            long startWallNanos = System.nanoTime();
+            String finalResponse = agent.chat(prompt, meter);
+            long endWallNanos = System.nanoTime();
+
+            int n = tokenCount[0];
+            double wallSec = (endWallNanos - startWallNanos) / 1e9;
+            double decodeSec = (lastTokenNanos[0] - firstTokenNanos[0]) / 1e9;
+            double wallTps = wallSec > 0 ? n / wallSec : 0;
+            double decodeTps = (n > 1 && decodeSec > 0) ? (n - 1) / decodeSec : 0;
 
             System.out.println();
             System.out.println("---");
             System.out.println("Final answer: " + finalResponse);
+            System.out.printf(
+                "[%d tokens — wall %.2fs (%.2f tok/s), decode %.2fs (%.2f tok/s)]%n",
+                n, wallSec, wallTps, decodeSec, decodeTps);
         }
     }
 }

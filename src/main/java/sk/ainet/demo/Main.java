@@ -47,6 +47,14 @@ public final class Main {
         Path modelPath = Path.of(args[0]);
         String prompt = args.length >= 2 ? args[1] : "What is 17 * 23?";
 
+        String systemPrompt = "You are a helpful assistant. When asked an arithmetic "
+            + "question, call the calculator tool exactly once.";
+        String templateName = "llama3";  // works for Llama 3.x; auto-detects if omitted
+
+        // Track whether the assistant is currently streaming a token line, so
+        // [TOOL CALL] / [TOOL RESULT] logs can break the line cleanly mid-stream.
+        final boolean[] assistantStreaming = {false};
+
         // 1. Define a calculator tool the model can call. The arguments map
         //    is decoded from the model's JSON output as plain Java types
         //    (String, Long, Double, Boolean, List, nested Map).
@@ -82,16 +90,33 @@ public final class Main {
             }
         };
 
+        // Wrap each tool with a logging decorator so we see what the model
+        // actually called, with which arguments, and what we returned. The
+        // JavaAgentLoop dispatches tool calls through JavaTool.execute(), so
+        // this is the cleanest hook the Java surface exposes.
+        JavaTool loggedCalculator = loggingTool(calculator, assistantStreaming);
+
+        // Up-front: dump the configuration the agent will run with — model,
+        // chat template, system prompt, and the tool catalogue the model is
+        // told it can call (name + description + JSON-Schema parameters).
+        System.out.println("[CONFIG]    model=" + modelPath);
+        System.out.println("[CONFIG]    template=" + templateName);
+        System.out.println("[SYSTEM]    " + systemPrompt);
+        ToolDefinition def = calculator.getDefinition();
+        System.out.println("[TOOLS]     1 tool registered:");
+        System.out.println("            - " + def.getName() + ": " + def.getDescription());
+        System.out.println("              schema: " + def.getParameters());
+        System.out.println("[USER]      " + prompt);
+
         // 2. Load the model and run the tool-calling agent loop. The session
         //    is AutoCloseable — close it to release off-heap memory.
         try (KLlamaSession session = KLlamaJava.loadGGUF(modelPath, /* systemPrompt */ null)) {
             JavaAgentLoop agent = JavaAgentLoop.builder()
                 .session(session)
-                .tool(calculator)
-                .systemPrompt("You are a helpful assistant. When asked an arithmetic "
-                    + "question, call the calculator tool exactly once.")
+                .tool(loggedCalculator)
+                .systemPrompt(systemPrompt)
                 .config(new AgentConfig())
-                .template("llama3")  // works for Llama 3.x; auto-detects if omitted
+                .template(templateName)
                 .metadata(new ModelMetadata())
                 .build();
 
@@ -108,12 +133,20 @@ public final class Main {
                 if (firstTokenNanos[0] == 0) firstTokenNanos[0] = now;
                 lastTokenNanos[0] = now;
                 tokenCount[0]++;
+                if (!assistantStreaming[0]) {
+                    System.out.print("[ASSISTANT] ");
+                    assistantStreaming[0] = true;
+                }
                 System.out.print(token);
             };
 
             long startWallNanos = System.nanoTime();
             String finalResponse = agent.chat(prompt, meter);
             long endWallNanos = System.nanoTime();
+            if (assistantStreaming[0]) {
+                System.out.println();
+                assistantStreaming[0] = false;
+            }
 
             int n = tokenCount[0];
             double wallSec = (endWallNanos - startWallNanos) / 1e9;
@@ -121,12 +154,40 @@ public final class Main {
             double wallTps = wallSec > 0 ? n / wallSec : 0;
             double decodeTps = (n > 1 && decodeSec > 0) ? (n - 1) / decodeSec : 0;
 
-            System.out.println();
             System.out.println("---");
-            System.out.println("Final answer: " + finalResponse);
+            System.out.println("[FINAL]     " + finalResponse);
             System.out.printf(
-                "[%d tokens — wall %.2fs (%.2f tok/s), decode %.2fs (%.2f tok/s)]%n",
+                "[STATS]     %d tokens — wall %.2fs (%.2f tok/s), decode %.2fs (%.2f tok/s)%n",
                 n, wallSec, wallTps, decodeSec, decodeTps);
         }
+    }
+
+    /**
+     * Wraps a {@link JavaTool} so each invocation prints the call site
+     * (tool name + decoded arguments) and the returned value. The
+     * {@code streamingFlag} is the shared "assistant is mid-stream" latch
+     * from {@link #main} — when set, we emit a leading newline so the log
+     * line doesn't get appended to a half-finished assistant token line.
+     */
+    private static JavaTool loggingTool(JavaTool delegate, boolean[] streamingFlag) {
+        return new JavaTool() {
+            @Override
+            public ToolDefinition getDefinition() {
+                return delegate.getDefinition();
+            }
+
+            @Override
+            public String execute(Map<String, ?> arguments) {
+                if (streamingFlag[0]) {
+                    System.out.println();
+                    streamingFlag[0] = false;
+                }
+                String name = delegate.getDefinition().getName();
+                System.out.println("[TOOL CALL] " + name + " args=" + arguments);
+                String result = delegate.execute(arguments);
+                System.out.println("[TOOL RESULT] " + name + " -> " + result);
+                return result;
+            }
+        };
     }
 }
